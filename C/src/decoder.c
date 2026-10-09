@@ -6,6 +6,7 @@
 #include "tables.h"
 #include "unpack.h"
 #include "utility.h"
+#include <stdlib.h>
 #include <string.h>
 
 static At9Status DecodeFrame(Frame* frame, BitReaderCxt* br);
@@ -25,9 +26,49 @@ At9Status Decode(Atrac9Handle* handle, const unsigned char* audio, unsigned char
 	return ERR_SUCCESS;
 }
 
+// Like Decode(), but never reads more than audioSize bytes of audio. A frame that needs
+// more than that is rejected with ERR_BUFFER_OVERRUN. If decoding fails for any reason
+// the decoder state that is carried over to the next frame is restored, so a bad frame
+// does not corrupt the frames after it.
+At9Status DecodeBounded(Atrac9Handle* handle, const unsigned char* audio, int audioSize, unsigned char* pcm, int* bytesUsed)
+{
+	*bytesUsed = 0;
+	if (audioSize <= 0) return ERR_BUFFER_OVERRUN;
+
+	Frame* frame = &handle->Frame;
+	const int blockCount = frame->Config->ChannelConfig.BlockCount;
+	const int savedIndex = frame->IndexInSuperframe;
+	Block* savedBlocks = (Block*)malloc(sizeof(Block) * blockCount);
+	if (savedBlocks) memcpy(savedBlocks, frame->Blocks, sizeof(Block) * blockCount);
+
+	BitReaderCxt br;
+	InitBitReaderCxtBounded(&br, audio, audioSize);
+	const At9Status status = DecodeFrame(frame, &br);
+
+	if (status != ERR_SUCCESS)
+	{
+		if (savedBlocks)
+		{
+			memcpy(frame->Blocks, savedBlocks, sizeof(Block) * blockCount);
+		}
+		frame->IndexInSuperframe = savedIndex;
+		free(savedBlocks);
+		return status;
+	}
+	free(savedBlocks);
+
+	PcmFloatToShort(frame, (short*)pcm);
+
+	*bytesUsed = br.Position / 8;
+	return ERR_SUCCESS;
+}
+
 static At9Status DecodeFrame(Frame* frame, BitReaderCxt* br)
 {
 	ERROR_CHECK(UnpackFrame(frame, br));
+
+	// Only possible with a bounded reader: the frame wanted more data than we were given
+	if (BitReaderOverrun(br)) return ERR_BUFFER_OVERRUN;
 
 	for (int i = 0; i < frame->Config->ChannelConfig.BlockCount; i++)
 	{

@@ -2,11 +2,26 @@
 #include "utility.h"
 
 static int PeekIntFallback(BitReaderCxt* br, int bitCount);
+static int PeekIntBounded(BitReaderCxt* br, int bitCount);
 
 void InitBitReaderCxt(BitReaderCxt* br, const void * buffer)
 {
 	br->Buffer = buffer;
 	br->Position = 0;
+	br->SizeBytes = -1;
+}
+
+void InitBitReaderCxtBounded(BitReaderCxt* br, const void * buffer, int sizeBytes)
+{
+	br->Buffer = buffer;
+	br->Position = 0;
+	br->SizeBytes = sizeBytes < 0 ? 0 : sizeBytes;
+}
+
+// True once the reader has been advanced past the end of a bounded buffer
+int BitReaderOverrun(const BitReaderCxt* br)
+{
+	return br->SizeBytes >= 0 && br->Position > br->SizeBytes * 8;
 }
 
 int ReadInt(BitReaderCxt* br, const int bits)
@@ -33,6 +48,13 @@ int ReadOffsetBinary(BitReaderCxt* br, const int bits)
 
 int PeekInt(BitReaderCxt* br, const int bits)
 {
+	// The fast paths below read up to 4 bytes at once. Near (or past) the end of a
+	// bounded buffer use the slow path, which returns zeros instead of reading out of bounds.
+	if (br->SizeBytes >= 0 && br->Position / 8 + 4 > br->SizeBytes)
+	{
+		return PeekIntBounded(br, bits);
+	}
+
 	const int byteIndex = br->Position / 8;
 	const int bitIndex = br->Position % 8;
 	const unsigned char* buffer = br->Buffer;
@@ -107,4 +129,27 @@ static int PeekIntFallback(BitReaderCxt* br, int bitCount)
 		bitCount -= bitsToRead;
 	}
 	return value;
+}
+
+// Same result as the fast paths, but any byte at or after SizeBytes reads as zero
+static int PeekIntBounded(BitReaderCxt* br, int bitCount)
+{
+	unsigned int value = 0;
+	int position = br->Position;
+
+	while (bitCount > 0)
+	{
+		const int byteIndex = position / 8;
+		const int bitIndex = position % 8;
+		const int available = 8 - bitIndex;
+		const int bitsToRead = bitCount < available ? bitCount : available;
+
+		const int currentByte = byteIndex < br->SizeBytes ? br->Buffer[byteIndex] : 0;
+		const unsigned int bits = ((unsigned int)currentByte & (0xFFu >> bitIndex)) >> (available - bitsToRead);
+
+		value = (value << bitsToRead) | bits;
+		position += bitsToRead;
+		bitCount -= bitsToRead;
+	}
+	return (int)value;
 }

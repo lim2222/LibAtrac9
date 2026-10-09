@@ -22,7 +22,9 @@ typedef enum At9Status
 	ERR_UNPACK_SCALE_FACTOR_MODE_INVALID,
 	ERR_UNPACK_SCALE_FACTOR_OOB,
 
-	ERR_UNPACK_EXTENSION_DATA_INVALID
+	ERR_UNPACK_EXTENSION_DATA_INVALID,
+
+	ERR_BUFFER_OVERRUN = 0x83000000 // frame needs more data than the caller provided
 } At9Status;
 
 #define ERROR_CHECK(x) do { \
